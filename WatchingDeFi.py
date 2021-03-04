@@ -1,5 +1,5 @@
 #encoding: utf-8
-# date : 2022/03/03
+# date : 2021/03/03
 # BSC 풀 상태 확인하기
 #
 # pip install web3.py
