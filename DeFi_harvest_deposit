@@ -221,7 +221,7 @@ while True:
         if total_claimed_token > 0 :
             num_token = get_num_token('cake', my_addr) # wallet에 있는 토큰 수
             print('\n deposit cake :', num_token / (10 ** 18 )  )
-            deposit_token(num_token-1, DEPOSIT_POOL) # token name, contract name to deposit
+            deposit_token(num_token-1, DEPOSIT_POOL) # num of tokens, contract name to deposit
         break
     except Exception as e:
         print(e)
