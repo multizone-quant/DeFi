@@ -1,0 +1,344 @@
+# encoding: utf-8
+# date : 2021/03/22
+# BSC 풀 상태 확인하기
+#
+# pip install web3
+#
+# 보다 자세한 내용을 아래 tistory 참고
+# https://money-expert.tistory.com/49
+# https://money-expert.tistory.com/50
+# https://money-expert.tistory.com/54
+#
+
+from web3 import Web3, HTTPProvider, IPCProvider
+from pycoingecko import CoinGeckoAPI
+import time
+import os
+from urllib.request import urlopen, Request
+import json
+
+# 수정할 부분
+my_addr = 'my eth address'
+my_priv = "my eth private key"
+
+ACTIONS = {
+    'pancakeswap' : {
+        'pool_name' : 'pancake-masterchef',
+        'claim_token_name' :  'cake',
+        'todo' : 'deposit',
+        'deposit_pool' : 'syrup-alice',  # harvest한 cake을 저장할 pool
+        'min_harvest_num' : 15  # harvest할 최소 수량
+    },
+    'cub-finance' : {
+        'pool_name' : 'cub-masterchef',
+        'claim_token_name' :  'cub',
+        'todo' : 'sell',
+        'min_harvest_num' : 40  # 매도할 최소 수량
+    },
+    'chickenkebab-finance' : {
+        'pool_name' : 'chik-masterchef',
+        'claim_token_name' :  'chik',
+        'todo' : 'sell',
+        'min_harvest_num' : 100  # 매도할 최소 수량
+    },
+    'helmet-finance' : {
+        'pool_name' : 'helmet-pool',
+        'claim_token_name' :  'helmet',
+        'todo' : 'compound',
+        'min_harvest_num' : 15  # compound할 최소 수량
+    },
+}
+# 수정할 부분 끝
+
+def fetch_abi(contract):
+    if not os.path.exists('contracts'):
+        os.mkdir('./contracts')
+
+    filename = 'contracts/'+contract+'.json'
+    if os.path.exists(filename):
+        with open(filename, 'r') as abi_file:
+            abi = abi_file.read()
+    else:
+        # TODO: Error handling
+        url = 'https://api.bscscan.com/api?module=contract&action=getabi&address=' + contract
+        abi_response = urlopen(Request(url, headers={'User-Agent': 'Mozilla'})).read().decode('utf8')
+        abi = json.loads(abi_response)['result']
+
+        with open(filename, 'w') as abi_file:
+            abi_file.write(abi)
+
+    return json.loads(abi)
+
+sc_addr = {
+    'bnb-busd' : '0x1B96B92314C44b159149f7E0303511fB2Fc4774f',
+    'cake-bnb' : '0xA527a61703D82139F8a06Bc30097cC9CAA2df5A6',
+    'ust-nflx' : '0xF609ade3846981825776068a8eD7746470029D1f',
+    'syrup-alice' : '0x4C32048628D0d32d4D6c52662FB4A92747782B56',
+    'syrup-cake' : '0x73feaa1eE314F8c655E354234017bE2193C9E24E',
+}
+
+sc_tokens = {
+    'bnb' : '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
+    'busd' : '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
+    'cake' : '0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82',
+    'nflx' : '0xa04F060077D90Fe2647B61e4dA4aD1F97d6649dc',
+    'ust' : '0x23396cF899Ca06c4472205fC903bDB4de249D6fC',
+    'usdt' : '0x55d398326f99059fF775485246999027B3197955',
+    'alice' : '0xac51066d7bec65dc4589368da368b212745d63e8',
+    'usdc' : '0xBA5Fe23f8a3a24BEd3236F05F2FcF35fd0BF0B5C',  # new one USDC contract 주소가 변경됨
+    'usdc-old' : '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+    'cub' : '0x50D809c74e0B8e49e7B4c65BB3109AbE3Ff4C1C1', 
+    'chik' : '0x893411cacf9e62a744d9fc0f72f7fb1b1373b6cd', 
+    'helmet' : '0x948d2a81086a075b3130bac19e4c6dee1d2e3fe8',
+}
+
+pools = { 
+        'pancake-masterchef' : '0x73feaa1eE314F8c655E354234017bE2193C9E24E',
+        'cub-masterchef' : '0x227e79C83065edB8B954848c46ca50b96CB33E16',
+        'chik-masterchef' : '0x6cb5FD9E05eec2Ed452E61F875317F179A410BeB',
+        'helmet-pool' : '0x279a073C491C873DF040B05cc846A3c47252b52c',  # proxy new 찾는 방법 알아야, 일단 수동으로 처리
+}
+w3 = Web3(Web3.HTTPProvider('https://bsc-dataseed.binance.org/'))
+
+print(w3.isConnected())
+
+# 예제로 pancakeswap 메인 풀
+# 아래 주소는 MasterChef 주소로 하위에 있는 채굴 풀에 대한 모든 정보를 얻을 수 있음
+# 각 풀별로 별도의 smart contract가 있음. 여기에서 pair에 대한 주소 정보를 얻을 수 있음 
+# ex
+# MasterChef : 0x73feaa1eE314F8c655E354234017bE2193C9E24E
+#  |
+#  +-- Cake-BNB LP : 0xA527a61703D82139F8a06Bc30097cC9CAA2df5A6
+#    |
+#    + Cake : 0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82
+#    + Bnb : 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c
+
+
+def fetch_abi(contract):
+    if not os.path.exists('contracts'):
+        os.mkdir('./contracts')
+
+    filename = "contracts/%s.json"%contract
+    if os.path.exists(filename):
+        with open(filename, 'r') as abi_file:
+            abi = abi_file.read()
+    else:
+        # TODO: Error handling
+        url = 'https://api.bscscan.com/api?module=contract&action=getabi&address=' + contract
+        abi_response = urlopen(Request(url, headers={'User-Agent': 'Mozilla'})).read().decode('utf8')
+        abi = json.loads(abi_response)['result']
+
+        with open(filename, 'w') as abi_file:
+            abi_file.write(abi)
+
+    return json.loads(abi)
+
+
+# 일반적인 풀의 abi. 만약 함수명이 틀린 풀이 있으면 해당 풀의 abi로 대체
+contract_common_abi = '[{"inputs":[],"payable":false,"stateMutability":"nonpayable","type":"constructor"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"owner","type":"address"},{"indexed":true,"internalType":"address","name":"spender","type":"address"},{"indexed":false,"internalType":"uint256","name":"value","type":"uint256"}],"name":"Approval","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"sender","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount0","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"amount1","type":"uint256"},{"indexed":true,"internalType":"address","name":"to","type":"address"}],"name":"Burn","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"sender","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount0","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"amount1","type":"uint256"}],"name":"Mint","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"sender","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount0In","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"amount1In","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"amount0Out","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"amount1Out","type":"uint256"},{"indexed":true,"internalType":"address","name":"to","type":"address"}],"name":"Swap","type":"event"},{"anonymous":false,"inputs":[{"indexed":false,"internalType":"uint112","name":"reserve0","type":"uint112"},{"indexed":false,"internalType":"uint112","name":"reserve1","type":"uint112"}],"name":"Sync","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"from","type":"address"},{"indexed":true,"internalType":"address","name":"to","type":"address"},{"indexed":false,"internalType":"uint256","name":"value","type":"uint256"}],"name":"Transfer","type":"event"},{"constant":true,"inputs":[],"name":"DOMAIN_SEPARATOR","outputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"MINIMUM_LIQUIDITY","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"PERMIT_TYPEHASH","outputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[{"internalType":"address","name":"","type":"address"},{"internalType":"address","name":"","type":"address"}],"name":"allowance","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"value","type":"uint256"}],"name":"approve","outputs":[{"internalType":"bool","name":"","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"to","type":"address"}],"name":"burn","outputs":[{"internalType":"uint256","name":"amount0","type":"uint256"},{"internalType":"uint256","name":"amount1","type":"uint256"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"factory","outputs":[{"internalType":"address","name":"","type":"address"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"getReserves","outputs":[{"internalType":"uint112","name":"_reserve0","type":"uint112"},{"internalType":"uint112","name":"_reserve1","type":"uint112"},{"internalType":"uint32","name":"_blockTimestampLast","type":"uint32"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"_token0","type":"address"},{"internalType":"address","name":"_token1","type":"address"}],"name":"initialize","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"kLast","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"to","type":"address"}],"name":"mint","outputs":[{"internalType":"uint256","name":"liquidity","type":"uint256"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"name","outputs":[{"internalType":"string","name":"","type":"string"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"nonces","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"owner","type":"address"},{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"value","type":"uint256"},{"internalType":"uint256","name":"deadline","type":"uint256"},{"internalType":"uint8","name":"v","type":"uint8"},{"internalType":"bytes32","name":"r","type":"bytes32"},{"internalType":"bytes32","name":"s","type":"bytes32"}],"name":"permit","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"price0CumulativeLast","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"price1CumulativeLast","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"to","type":"address"}],"name":"skim","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":false,"inputs":[{"internalType":"uint256","name":"amount0Out","type":"uint256"},{"internalType":"uint256","name":"amount1Out","type":"uint256"},{"internalType":"address","name":"to","type":"address"},{"internalType":"bytes","name":"data","type":"bytes"}],"name":"swap","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"symbol","outputs":[{"internalType":"string","name":"","type":"string"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[],"name":"sync","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"token0","outputs":[{"internalType":"address","name":"","type":"address"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"token1","outputs":[{"internalType":"address","name":"","type":"address"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"totalSupply","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"value","type":"uint256"}],"name":"transfer","outputs":[{"internalType":"bool","name":"","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"from","type":"address"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"value","type":"uint256"}],"name":"transferFrom","outputs":[{"internalType":"bool","name":"","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"}]'    
+
+# masterchef에 있는 pool에서 harvest
+def harvest_token_master(contract, i):
+    tx = contract.functions.withdraw(i, 0).buildTransaction({
+                'gas': 150000,
+                'gasPrice': w3.toWei('10', 'gwei'),
+                'nonce':  w3.eth.getTransactionCount(my_addr),
+            })
+    signed_tx = w3.eth.account.signTransaction(tx, private_key=my_priv)
+    ret = w3.eth.sendRawTransaction(signed_tx.rawTransaction)
+
+# wallet에 있는 token 잔고
+def get_num_token(token_name, wallet_addr) : 
+    token_addr = sc_tokens[token_name]
+    abi = fetch_abi(token_addr)
+
+    cont_addr = w3.eth.contract(token_addr, abi=abi)
+
+    return cont_addr.functions.balanceOf(wallet_addr).call() 
+
+
+# swap
+def sell_token(amount, from_token, to_token):
+    exch_addr = '0x05fF2B0DB69458A0750badebc4f9e13aDd608C7F'
+    exch_abi = '[{"inputs":[{"internalType":"address","name":"_factory","type":"address"},{"internalType":"address","name":"_WETH","type":"address"}],"stateMutability":"nonpayable","type":"constructor"},{"inputs":[],"name":"WETH","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"tokenA","type":"address"},{"internalType":"address","name":"tokenB","type":"address"},{"internalType":"uint256","name":"amountADesired","type":"uint256"},{"internalType":"uint256","name":"amountBDesired","type":"uint256"},{"internalType":"uint256","name":"amountAMin","type":"uint256"},{"internalType":"uint256","name":"amountBMin","type":"uint256"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"addLiquidity","outputs":[{"internalType":"uint256","name":"amountA","type":"uint256"},{"internalType":"uint256","name":"amountB","type":"uint256"},{"internalType":"uint256","name":"liquidity","type":"uint256"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"amountTokenDesired","type":"uint256"},{"internalType":"uint256","name":"amountTokenMin","type":"uint256"},{"internalType":"uint256","name":"amountETHMin","type":"uint256"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"addLiquidityETH","outputs":[{"internalType":"uint256","name":"amountToken","type":"uint256"},{"internalType":"uint256","name":"amountETH","type":"uint256"},{"internalType":"uint256","name":"liquidity","type":"uint256"}],"stateMutability":"payable","type":"function"},{"inputs":[],"name":"factory","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountOut","type":"uint256"},{"internalType":"uint256","name":"reserveIn","type":"uint256"},{"internalType":"uint256","name":"reserveOut","type":"uint256"}],"name":"getAmountIn","outputs":[{"internalType":"uint256","name":"amountIn","type":"uint256"}],"stateMutability":"pure","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountIn","type":"uint256"},{"internalType":"uint256","name":"reserveIn","type":"uint256"},{"internalType":"uint256","name":"reserveOut","type":"uint256"}],"name":"getAmountOut","outputs":[{"internalType":"uint256","name":"amountOut","type":"uint256"}],"stateMutability":"pure","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountOut","type":"uint256"},{"internalType":"address[]","name":"path","type":"address[]"}],"name":"getAmountsIn","outputs":[{"internalType":"uint256[]","name":"amounts","type":"uint256[]"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountIn","type":"uint256"},{"internalType":"address[]","name":"path","type":"address[]"}],"name":"getAmountsOut","outputs":[{"internalType":"uint256[]","name":"amounts","type":"uint256[]"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountA","type":"uint256"},{"internalType":"uint256","name":"reserveA","type":"uint256"},{"internalType":"uint256","name":"reserveB","type":"uint256"}],"name":"quote","outputs":[{"internalType":"uint256","name":"amountB","type":"uint256"}],"stateMutability":"pure","type":"function"},{"inputs":[{"internalType":"address","name":"tokenA","type":"address"},{"internalType":"address","name":"tokenB","type":"address"},{"internalType":"uint256","name":"liquidity","type":"uint256"},{"internalType":"uint256","name":"amountAMin","type":"uint256"},{"internalType":"uint256","name":"amountBMin","type":"uint256"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"removeLiquidity","outputs":[{"internalType":"uint256","name":"amountA","type":"uint256"},{"internalType":"uint256","name":"amountB","type":"uint256"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"liquidity","type":"uint256"},{"internalType":"uint256","name":"amountTokenMin","type":"uint256"},{"internalType":"uint256","name":"amountETHMin","type":"uint256"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"removeLiquidityETH","outputs":[{"internalType":"uint256","name":"amountToken","type":"uint256"},{"internalType":"uint256","name":"amountETH","type":"uint256"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"liquidity","type":"uint256"},{"internalType":"uint256","name":"amountTokenMin","type":"uint256"},{"internalType":"uint256","name":"amountETHMin","type":"uint256"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"removeLiquidityETHSupportingFeeOnTransferTokens","outputs":[{"internalType":"uint256","name":"amountETH","type":"uint256"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"liquidity","type":"uint256"},{"internalType":"uint256","name":"amountTokenMin","type":"uint256"},{"internalType":"uint256","name":"amountETHMin","type":"uint256"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"},{"internalType":"bool","name":"approveMax","type":"bool"},{"internalType":"uint8","name":"v","type":"uint8"},{"internalType":"bytes32","name":"r","type":"bytes32"},{"internalType":"bytes32","name":"s","type":"bytes32"}],"name":"removeLiquidityETHWithPermit","outputs":[{"internalType":"uint256","name":"amountToken","type":"uint256"},{"internalType":"uint256","name":"amountETH","type":"uint256"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"liquidity","type":"uint256"},{"internalType":"uint256","name":"amountTokenMin","type":"uint256"},{"internalType":"uint256","name":"amountETHMin","type":"uint256"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"},{"internalType":"bool","name":"approveMax","type":"bool"},{"internalType":"uint8","name":"v","type":"uint8"},{"internalType":"bytes32","name":"r","type":"bytes32"},{"internalType":"bytes32","name":"s","type":"bytes32"}],"name":"removeLiquidityETHWithPermitSupportingFeeOnTransferTokens","outputs":[{"internalType":"uint256","name":"amountETH","type":"uint256"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"tokenA","type":"address"},{"internalType":"address","name":"tokenB","type":"address"},{"internalType":"uint256","name":"liquidity","type":"uint256"},{"internalType":"uint256","name":"amountAMin","type":"uint256"},{"internalType":"uint256","name":"amountBMin","type":"uint256"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"},{"internalType":"bool","name":"approveMax","type":"bool"},{"internalType":"uint8","name":"v","type":"uint8"},{"internalType":"bytes32","name":"r","type":"bytes32"},{"internalType":"bytes32","name":"s","type":"bytes32"}],"name":"removeLiquidityWithPermit","outputs":[{"internalType":"uint256","name":"amountA","type":"uint256"},{"internalType":"uint256","name":"amountB","type":"uint256"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountOut","type":"uint256"},{"internalType":"address[]","name":"path","type":"address[]"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"swapETHForExactTokens","outputs":[{"internalType":"uint256[]","name":"amounts","type":"uint256[]"}],"stateMutability":"payable","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountOutMin","type":"uint256"},{"internalType":"address[]","name":"path","type":"address[]"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"swapExactETHForTokens","outputs":[{"internalType":"uint256[]","name":"amounts","type":"uint256[]"}],"stateMutability":"payable","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountOutMin","type":"uint256"},{"internalType":"address[]","name":"path","type":"address[]"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"swapExactETHForTokensSupportingFeeOnTransferTokens","outputs":[],"stateMutability":"payable","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountIn","type":"uint256"},{"internalType":"uint256","name":"amountOutMin","type":"uint256"},{"internalType":"address[]","name":"path","type":"address[]"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"swapExactTokensForETH","outputs":[{"internalType":"uint256[]","name":"amounts","type":"uint256[]"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountIn","type":"uint256"},{"internalType":"uint256","name":"amountOutMin","type":"uint256"},{"internalType":"address[]","name":"path","type":"address[]"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"swapExactTokensForETHSupportingFeeOnTransferTokens","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountIn","type":"uint256"},{"internalType":"uint256","name":"amountOutMin","type":"uint256"},{"internalType":"address[]","name":"path","type":"address[]"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"swapExactTokensForTokens","outputs":[{"internalType":"uint256[]","name":"amounts","type":"uint256[]"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountIn","type":"uint256"},{"internalType":"uint256","name":"amountOutMin","type":"uint256"},{"internalType":"address[]","name":"path","type":"address[]"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"swapExactTokensForTokensSupportingFeeOnTransferTokens","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountOut","type":"uint256"},{"internalType":"uint256","name":"amountInMax","type":"uint256"},{"internalType":"address[]","name":"path","type":"address[]"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"swapTokensForExactETH","outputs":[{"internalType":"uint256[]","name":"amounts","type":"uint256[]"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"uint256","name":"amountOut","type":"uint256"},{"internalType":"uint256","name":"amountInMax","type":"uint256"},{"internalType":"address[]","name":"path","type":"address[]"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"deadline","type":"uint256"}],"name":"swapTokensForExactTokens","outputs":[{"internalType":"uint256[]","name":"amounts","type":"uint256[]"}],"stateMutability":"nonpayable","type":"function"},{"stateMutability":"payable","type":"receive"}]'
+    addr = w3.toChecksumAddress(exch_addr)
+    exchange = w3.eth.contract(address=addr, abi=exch_abi)
+
+    # amount_in, addr
+    pair = []
+    addr1 = w3.toChecksumAddress(sc_tokens[from_token])
+    pair.append(addr1)
+    addr2 = w3.toChecksumAddress(sc_tokens[to_token])
+    pair.append(addr2)
+
+    name = 'getAmountsOut'
+
+    ret = exchange.functions.getAmountsOut(amountIn=amount, path=pair).call()
+
+    slippage = 0.005
+    given_amount = ret[0]
+    out_amount = ret[1]
+    min_amount = int(out_amount * (1-slippage))
+    deadline = int(time.time()) + 20 # deadline 10초
+
+    tx = exchange.functions.swapExactTokensForTokens(given_amount, min_amount, pair, my_addr, deadline).buildTransaction({
+                'gas': 150000,
+                'gasPrice': w3.toWei('10', 'gwei'),
+                'nonce':  w3.eth.getTransactionCount(my_addr),
+            })
+    signed_tx = w3.eth.account.signTransaction(tx, private_key=my_priv)
+    ret = w3.eth.sendRawTransaction(signed_tx.rawTransaction)
+    #txn_receipt = w3.eth.waitForTransactionReceipt(txn_hash)
+    print('swap done', from_token, amount/(10 ** 18 ), '->', to_token, out_amount)
+    print('')
+    #ret = exchange.functions['swapExactTokensForTokens'](given_amount, min_amount, pair, my_addr, deadline).call()
+
+
+# syrup에 있는 pool에 deposit
+def deposit_token(num_token, to_pool):
+    addr = sc_addr[to_pool]
+    abi = fetch_abi(addr)
+    contract = w3.eth.contract(address=addr, abi=abi)
+    if to_pool == 'syrup-cake' : # cake pool의 경우에는 smart contract가 틀림 enterStaking()
+        tx = contract.functions.enterStaking(num_token).buildTransaction({
+                    'gas': 150000,
+                    'gasPrice': w3.toWei('10', 'gwei'),
+                    'nonce':  w3.eth.getTransactionCount(my_addr),
+                })
+    else :
+        tx = contract.functions.deposit(num_token).buildTransaction({
+                    'gas': 150000,
+                    'gasPrice': w3.toWei('10', 'gwei'),
+                    'nonce':  w3.eth.getTransactionCount(my_addr),
+                })
+    signed_tx = w3.eth.account.signTransaction(tx, private_key=my_priv)
+    ret = w3.eth.sendRawTransaction(signed_tx.rawTransaction)
+
+# name pool에서 min_harvest_num 이상 채굴된 풀에 대하여 claim
+def claim_rewards(name, min_harvest_num, todo):
+    addr = pools[name]
+    addr = w3.toChecksumAddress(addr)
+    abi = fetch_abi(addr)
+    master = w3.eth.contract(addr, abi=abi)
+    if todo == 'compound':
+        pending_tokens = master.functions.earned(my_addr).call()
+        pending_token_real = pending_tokens/(10 ** 18 )
+        claimed = ''
+        if pending_token_real > min_harvest_num :
+            master.functions.compound().call()
+            claimed = '*'
+        print("%6s %10.3f %s"%(name, pending_token_real, claimed))
+        return 0
+
+    # get # of pools
+    poolLength = master.functions.poolLength().call()
+    print('# of pools :', poolLength)
+    print('-------------------------------------------')
+    print("           pair          earned")
+    print('-------------------------------------------')
+
+    total_claimed_token = 0
+    start = 1
+    if name.find('cub') >= 0 :  # cub finance는 0부터 시작
+        start = 0
+    for i in range(start, poolLength) :
+        amount = 0
+        debt = 0
+        user_info = master.functions.userInfo(i, my_addr).call()
+        amount = user_info[0]
+        if amount > 0 :  # for only staked pools
+            pool_addr =''
+
+            # get lp pair info
+            poolInfo = master.functions.poolInfo(i).call()
+            pool_addr = poolInfo[0]
+
+            # get pending cakes
+            pending_token_real = 0
+            pending_tokens = 0
+            deposit = 0
+            claimed = ''
+            if name.find('cake') >= 0 :
+                pending_tokens = master.functions.pendingCake(i, my_addr).call() 
+            elif name.find('cub') >= 0 :
+                pending_tokens = master.functions.pendingCub(i, my_addr).call()
+                
+            pending_token_real = pending_tokens/(10 ** 18 )
+            if pending_token_real > min_harvest_num :  # 최소 min_harvest_num 이상 채굴된 pool에 한하여 claim
+                harvest_token_master(master, i)
+                total_claimed_token += pending_token_real
+                claimed = '*'
+            # token info in lp
+            addr1 = pool_addr
+            abi1 = fetch_abi(addr1)
+            e1 = w3.eth.contract(addr1, abi=abi1)
+#            print('pool :',  addr1)
+    
+            # token 1
+            sym1 = ''
+            sym2 = ''
+            token1 = e1.functions.token0().call()
+            if token1 != None :
+                if token1 == sc_tokens['usdc-old'] :
+                    token1 = sc_tokens['usdc']
+                token1 = w3.toChecksumAddress(token1)
+                abi1 = fetch_abi(token1)
+                t1 = w3.eth.contract(token1, abi=abi1)
+                name1 = t1.functions.name().call()
+                sym1 = t1.functions.symbol().call()
+
+                # token 2
+                token2 = e1.functions.token1().call()
+                if token2 == sc_tokens['usdc-old'] :
+                    token2 = sc_tokens['usdc']
+                token2 = w3.toChecksumAddress(token2)
+                # abi 값을 받아서 처리하였으나, berry의 경우에 문제가 있어서 common으로 대체
+                if name.find('cake') >= 0 :
+                    t2 = w3.eth.contract(token2, abi=contract_common_abi)
+                else :
+                    abi2 = fetch_abi(token2)
+                    t2 = w3.eth.contract(token2, abi=abi2)
+
+                name2 = t2.functions.name().call()
+                sym2 = t2.functions.symbol().call()
+
+            master_coins = ['UST', 'BNB', 'ETH', 'BUSD']
+            if sym1 in  master_coins : # sm1이 master_coins의 경우에는 순서를 바꿔서 출력
+                tmp = sym1
+                sym1 = sym2
+                sym2 = tmp
+            print("%2d [%6s - %6s] %10.3f %s"%(i, sym1, sym2, pending_token_real, claimed))
+            
+    return total_claimed_token
+
+def auto_farming(name) :
+    pool_name = ACTIONS[name]['pool_name']
+    min_harvest_num = ACTIONS[name]['min_harvest_num']
+    claim_token_name = ACTIONS[name]['claim_token_name']
+    todo = ACTIONS[name]['todo']
+
+    deposit_pool = ''
+    if 'deposit_pool' in ACTIONS[name] :
+        deposit_pool = ACTIONS[name]['deposit_pool']
+
+    print('\n===', pool_name, '===')
+    total_claimed_token = 1
+    total_claimed_token = claim_rewards(pool_name, min_harvest_num, todo) 
+    if total_claimed_token > 0 :
+        num_token = get_num_token(claim_token_name, my_addr) # wallet에 있는 토큰 수
+        if todo == 'deposit' :
+            print('\n deposit ', claim_token_name, ' :', num_token / (10 ** 18 ), 'to :', deposit_pool)
+            deposit_token(num_token-1, deposit_pool) # num of tokens, contract name to deposit
+        elif todo == 'sell' :
+            sell_token(num_token-1, claim_token_name, 'busd') # num from to
+
+
+while True:
+    try:
+        for finance in ACTIONS :
+            auto_farming(finance) 
+        print('\ndone! waiting 1 hour')
+        time.sleep(60*60) # every hour
+    except Exception as e:
+        print('error', e)
+        break
