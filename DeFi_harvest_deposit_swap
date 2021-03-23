@@ -252,6 +252,8 @@ def claim_rewards(name, min_harvest_num, todo):
             # get lp pair info
             poolInfo = master.functions.poolInfo(i).call()
             pool_addr = poolInfo[0]
+            if pool_addr == '0x50D809c74e0B8e49e7B4c65BB3109AbE3Ff4C1C1' : # cub pool
+                continue  # 무시함
 
             # get pending cakes
             pending_token_real = 0
@@ -262,6 +264,8 @@ def claim_rewards(name, min_harvest_num, todo):
                 pending_tokens = master.functions.pendingCake(i, my_addr).call() 
             elif name.find('cub') >= 0 :
                 pending_tokens = master.functions.pendingCub(i, my_addr).call()
+            elif name.find('chik') >= 0 :
+                pending_tokens = master.functions.pendingReward(i, my_addr).call()
                 
             pending_token_real = pending_tokens/(10 ** 18 )
             if pending_token_real > min_harvest_num :  # 최소 min_harvest_num 이상 채굴된 pool에 한하여 claim
