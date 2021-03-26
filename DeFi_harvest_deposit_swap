@@ -84,11 +84,11 @@ sc_tokens = {
     'nflx' : '0xa04F060077D90Fe2647B61e4dA4aD1F97d6649dc',
     'ust' : '0x23396cF899Ca06c4472205fC903bDB4de249D6fC',
     'usdt' : '0x55d398326f99059fF775485246999027B3197955',
-    'alice' : '0xac51066d7bec65dc4589368da368b212745d63e8',
+    'alice' : '0xAC51066d7bEC65Dc4589368da368b212745d63E8',
     'usdc' : '0xBA5Fe23f8a3a24BEd3236F05F2FcF35fd0BF0B5C',  # new one USDC contract 주소가 변경됨
     'usdc-old' : '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
     'cub' : '0x50D809c74e0B8e49e7B4c65BB3109AbE3Ff4C1C1', 
-    'chik' : '0x893411cacf9e62a744d9fc0f72f7fb1b1373b6cd', 
+    'chik' : '0x893411cAcf9E62A744D9fc0f72F7fb1b1373B6cD', 
     'helmet' : '0x948d2a81086a075b3130bac19e4c6dee1d2e3fe8',
 }
 
