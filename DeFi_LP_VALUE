@@ -1,0 +1,347 @@
+# encoding: utf-8
+# date : 2021/03/22
+# BSC 풀 상태 확인하기
+#
+# pip install web3
+#
+# 보다 자세한 내용을 아래 tistory 참고
+# https://money-expert.tistory.com/49
+# https://money-expert.tistory.com/50
+# https://money-expert.tistory.com/54
+#
+
+from web3 import Web3, HTTPProvider, IPCProvider
+from pycoingecko import CoinGeckoAPI
+import time
+import os
+from urllib.request import urlopen, Request
+import json
+
+# 수정할 부분
+my_addr = 'my eth addr'
+
+#일단 cub만 확인함
+YIELD_ACTIONS = {
+#    'pancakeswap' : {
+#        'pool_name' : 'pancake-masterchef',
+#        'todo' : 'cur_status',
+#    },
+    'cub-finance' : {
+        'pool_name' : 'cub-masterchef',
+        'todo' : 'cur_status',
+    },
+}
+INT_TOKENS = ['BTC', 'ETH', 'BNB', 'CAKE']
+
+CUR_PRICE = {
+             'USDT' : 1,
+             'USD' : 1,
+             'USDC' : 1,
+             'BUSD' : 1,
+             'UST' : 1,
+             }   # 현재가. 필요하면 중간 중간 계산한다. format { 'coin_name':price, ...,  }
+# 수정할 부분 끝
+
+def fetch_abi(contract):
+    if not os.path.exists('contracts'):
+        os.mkdir('./contracts')
+
+    filename = 'contracts/'+contract+'.json'
+    if os.path.exists(filename):
+        with open(filename, 'r') as abi_file:
+            abi = abi_file.read()
+    else:
+        # TODO: Error handling
+        url = 'https://api.bscscan.com/api?module=contract&action=getabi&address=' + contract
+        abi_response = urlopen(Request(url, headers={'User-Agent': 'Mozilla'})).read().decode('utf8')
+        abi = json.loads(abi_response)['result']
+
+        with open(filename, 'w') as abi_file:
+            abi_file.write(abi)
+
+    return json.loads(abi)
+
+
+# 가격 : bnb, busd sc에서 cake lp주소로 balance한 후 busd/bnb로 나누면 bnb 가격
+sc_addr = {
+    'bnb-busd' : '0x1B96B92314C44b159149f7E0303511fB2Fc4774f',
+    'cake-bnb' : '0xA527a61703D82139F8a06Bc30097cC9CAA2df5A6',
+    'ust-nflx' : '0xF609ade3846981825776068a8eD7746470029D1f',
+    'syrup-alice' : '0x4C32048628D0d32d4D6c52662FB4A92747782B56',
+    'syrup-cake' : '0x73feaa1eE314F8c655E354234017bE2193C9E24E',
+}
+
+sc_tokens = {
+    'bnb' : '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
+    'busd' : '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
+    'cake' : '0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82',
+    'nflx' : '0xa04F060077D90Fe2647B61e4dA4aD1F97d6649dc',
+    'ust' : '0x23396cF899Ca06c4472205fC903bDB4de249D6fC',
+    'usdt' : '0x55d398326f99059fF775485246999027B3197955',
+    'alice' : '0xAC51066d7bEC65Dc4589368da368b212745d63E8',
+    'usdc' : '0xBA5Fe23f8a3a24BEd3236F05F2FcF35fd0BF0B5C',  # new one USDC contract 주소가 변경됨
+    'usdc-old' : '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+    'cub' : '0x50D809c74e0B8e49e7B4c65BB3109AbE3Ff4C1C1', 
+    'chik' : '0x893411cAcf9E62A744D9fc0f72F7fb1b1373B6cD', 
+    'helmet' : '0x948d2a81086a075b3130bac19e4c6dee1d2e3fe8',
+}
+
+pools = { 
+        'pancake-masterchef' : '0x73feaa1eE314F8c655E354234017bE2193C9E24E',
+        'cub-masterchef' : '0x227e79C83065edB8B954848c46ca50b96CB33E16',
+        'chik-masterchef' : '0x6cb5FD9E05eec2Ed452E61F875317F179A410BeB',
+        'helmet-pool' : '0x279a073C491C873DF040B05cc846A3c47252b52c',  # proxy new 찾는 방법 알아야, 일단 수동으로 처리
+}
+w3 = Web3(Web3.HTTPProvider('https://bsc-dataseed.binance.org/'))
+
+print(w3.isConnected())
+
+# 예제로 pancakeswap 메인 풀
+# 아래 주소는 MasterChef 주소로 하위에 있는 채굴 풀에 대한 모든 정보를 얻을 수 있음
+# 각 풀별로 별도의 smart contract가 있음. 여기에서 pair에 대한 주소 정보를 얻을 수 있음 
+# ex
+# MasterChef : 0x73feaa1eE314F8c655E354234017bE2193C9E24E
+#  |
+#  +-- Cake-BNB LP : 0xA527a61703D82139F8a06Bc30097cC9CAA2df5A6
+#    |
+#    + Cake : 0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82
+#    + Bnb : 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c
+
+# cake pool : 0x73feaa1eE314F8c655E354234017bE2193C9E24E 사용함.
+# cake : enterStaking()  # 0x009cf7bc57584b7998236eff51b98a168dcea9b0 이건 뭘까? SyrupBar Token
+# get abi info
+# 0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82 이건 뭘까? cake이군.
+def fetch_abi(contract):
+    if not os.path.exists('contracts'):
+        os.mkdir('./contracts')
+
+    filename = "contracts/%s.json"%contract
+    if os.path.exists(filename):
+        with open(filename, 'r') as abi_file:
+            abi = abi_file.read()
+    else:
+        # TODO: Error handling
+        url = 'https://api.bscscan.com/api?module=contract&action=getabi&address=' + contract
+        abi_response = urlopen(Request(url, headers={'User-Agent': 'Mozilla'})).read().decode('utf8')
+        abi = json.loads(abi_response)['result']
+
+        with open(filename, 'w') as abi_file:
+            abi_file.write(abi)
+
+    return json.loads(abi)
+
+
+# 일반적인 풀의 abi. 만약 함수명이 틀린 풀이 있으면 해당 풀의 abi로 대체
+contract_common_abi = '[{"inputs":[],"payable":false,"stateMutability":"nonpayable","type":"constructor"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"owner","type":"address"},{"indexed":true,"internalType":"address","name":"spender","type":"address"},{"indexed":false,"internalType":"uint256","name":"value","type":"uint256"}],"name":"Approval","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"sender","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount0","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"amount1","type":"uint256"},{"indexed":true,"internalType":"address","name":"to","type":"address"}],"name":"Burn","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"sender","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount0","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"amount1","type":"uint256"}],"name":"Mint","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"sender","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount0In","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"amount1In","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"amount0Out","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"amount1Out","type":"uint256"},{"indexed":true,"internalType":"address","name":"to","type":"address"}],"name":"Swap","type":"event"},{"anonymous":false,"inputs":[{"indexed":false,"internalType":"uint112","name":"reserve0","type":"uint112"},{"indexed":false,"internalType":"uint112","name":"reserve1","type":"uint112"}],"name":"Sync","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"from","type":"address"},{"indexed":true,"internalType":"address","name":"to","type":"address"},{"indexed":false,"internalType":"uint256","name":"value","type":"uint256"}],"name":"Transfer","type":"event"},{"constant":true,"inputs":[],"name":"DOMAIN_SEPARATOR","outputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"MINIMUM_LIQUIDITY","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"PERMIT_TYPEHASH","outputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[{"internalType":"address","name":"","type":"address"},{"internalType":"address","name":"","type":"address"}],"name":"allowance","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"value","type":"uint256"}],"name":"approve","outputs":[{"internalType":"bool","name":"","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"to","type":"address"}],"name":"burn","outputs":[{"internalType":"uint256","name":"amount0","type":"uint256"},{"internalType":"uint256","name":"amount1","type":"uint256"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"factory","outputs":[{"internalType":"address","name":"","type":"address"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"getReserves","outputs":[{"internalType":"uint112","name":"_reserve0","type":"uint112"},{"internalType":"uint112","name":"_reserve1","type":"uint112"},{"internalType":"uint32","name":"_blockTimestampLast","type":"uint32"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"_token0","type":"address"},{"internalType":"address","name":"_token1","type":"address"}],"name":"initialize","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"kLast","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"to","type":"address"}],"name":"mint","outputs":[{"internalType":"uint256","name":"liquidity","type":"uint256"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"name","outputs":[{"internalType":"string","name":"","type":"string"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"nonces","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"owner","type":"address"},{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"value","type":"uint256"},{"internalType":"uint256","name":"deadline","type":"uint256"},{"internalType":"uint8","name":"v","type":"uint8"},{"internalType":"bytes32","name":"r","type":"bytes32"},{"internalType":"bytes32","name":"s","type":"bytes32"}],"name":"permit","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"price0CumulativeLast","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"price1CumulativeLast","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"to","type":"address"}],"name":"skim","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":false,"inputs":[{"internalType":"uint256","name":"amount0Out","type":"uint256"},{"internalType":"uint256","name":"amount1Out","type":"uint256"},{"internalType":"address","name":"to","type":"address"},{"internalType":"bytes","name":"data","type":"bytes"}],"name":"swap","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"symbol","outputs":[{"internalType":"string","name":"","type":"string"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[],"name":"sync","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"token0","outputs":[{"internalType":"address","name":"","type":"address"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"token1","outputs":[{"internalType":"address","name":"","type":"address"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"totalSupply","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"value","type":"uint256"}],"name":"transfer","outputs":[{"internalType":"bool","name":"","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":false,"inputs":[{"internalType":"address","name":"from","type":"address"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"value","type":"uint256"}],"name":"transferFrom","outputs":[{"internalType":"bool","name":"","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"}]'    
+
+
+
+# wallet에 있는 token 잔고
+def get_num_token(token_name, wallet_addr) : 
+    token_addr = sc_tokens[token_name]
+    abi = fetch_abi(token_addr)
+
+    cont_addr = w3.eth.contract(token_addr, abi=abi)
+
+    return cont_addr.functions.balanceOf(wallet_addr).call() 
+
+# name pool에서 min_harvest_num 이상 채굴된 풀에 대하여 claim
+def claim_rewards(name, min_harvest_num, todo):
+    addr = pools[name]
+    addr = w3.toChecksumAddress(addr)
+    abi = fetch_abi(addr)
+    master = w3.eth.contract(addr, abi=abi)
+    if todo == 'compound':
+        pending_tokens = master.functions.earned(my_addr).call()
+        pending_token_real = pending_tokens/(10 ** 18 )
+        claimed = ''
+        if pending_token_real > min_harvest_num :
+            master.functions.compound().call()
+            claimed = '*'
+        print("%6s %10.3f %s"%(name, pending_token_real, claimed))
+        return 0
+
+    # get # of pools
+    poolLength = master.functions.poolLength().call()
+    print('# of pools :', poolLength)
+    print('------------------------------------------------------------------------')
+    print("pid        pair          earned    token1      token2   value")
+    print('------------------------------------------------------------------------')
+
+    total_claimed_token = 0
+    start = 1
+    if name.find('cub') >= 0 :  # cub finance는 0부터 시작
+        start = 0
+    total_value = 0
+    for i in range(start, poolLength) :
+        amount = 0
+        debt = 0
+        user_info = master.functions.userInfo(i, my_addr).call()
+        amount = user_info[0]
+        if amount > 0 :  # for only staked pools
+            pool_addr =''
+
+            # get lp pair info
+            poolInfo = master.functions.poolInfo(i).call()
+            pool_addr = poolInfo[0]
+            if pool_addr == '0x50D809c74e0B8e49e7B4c65BB3109AbE3Ff4C1C1' : # cub pool
+                continue  # 무시함
+
+            # get pending tokens
+            pending_token_real = 0
+            pending_tokens = 0
+            deposit = 0
+            claimed = ''
+            if name.find('cake') >= 0 :
+                pending_tokens = master.functions.pendingCake(i, my_addr).call() 
+            elif name.find('cub') >= 0 :
+                pending_tokens = master.functions.pendingCub(i, my_addr).call()
+            elif name.find('chik') >= 0 :
+                pending_tokens = master.functions.pendingReward(i, my_addr).call()
+                
+            pending_token_real = pending_tokens/(10 ** 18 )
+
+            # token info in lp
+            addr1 = pool_addr
+            abi1 = fetch_abi(addr1)
+            e1 = w3.eth.contract(addr1, abi=abi1)
+#            print(i, 'pool :',  addr1)
+    
+            # token 1
+            sym1 = ''
+            sym2 = ''
+            token1 = e1.functions.token0().call()
+            try : 
+                if token1 == sc_tokens['usdc-old'] :
+                    token1 = sc_tokens['usdc']
+                token1 = w3.toChecksumAddress(token1)
+                abi1 = fetch_abi(token1)
+                t1 = w3.eth.contract(token1, abi=abi1)
+                name1 = t1.functions.name().call()
+                sym1 = t1.functions.symbol().call()
+                bal1 = t1.functions.balanceOf(pool_addr).call() / (10 ** 18 ) 
+
+                # token 2
+                token2 = e1.functions.token1().call()
+                if token2 == sc_tokens['usdc-old'] :
+                    token2 = sc_tokens['usdc']
+                token2 = w3.toChecksumAddress(token2)
+                # abi 값을 받아서 처리하였으나, berry의 경우에 문제가 있어서 common으로 대체
+                if name.find('cake') >= 0 :
+                    t2 = w3.eth.contract(token2, abi=contract_common_abi)
+                else :
+                    abi2 = fetch_abi(token2)
+                    t2 = w3.eth.contract(token2, abi=abi2)
+
+                name2 = t2.functions.name().call()
+                sym2 = t2.functions.symbol().call()
+                bal2 = t2.functions.balanceOf(pool_addr).call() / (10 ** 18 ) 
+            except Exception as e:
+                print('error ', e, i, 'pool :',  addr1)
+                break
+
+            # symol1 코인 가격이 현재 없으면 contract로 가격을 구한다.            
+            if sym1 not in CUR_PRICE :
+                bnb_price = 0
+                if sym2 == 'BNB' or sym2 == 'WBNB' :
+                    bnb_price = 1
+
+                price = bal1 / bal2
+
+                # bnb 기반 lp이면 bnb 가격을 곱해준다. us$ 기준으로 돌려줌
+                if bnb_price :
+                    price *= bnb_price
+
+                CUR_PRICE[sym1] = price
+
+            # pool addr
+            lp_total = e1.functions.totalSupply().call()
+
+            my_share = amount / lp_total 
+            my_holding_token1 = bal1 * my_share
+            my_holding_token2 = bal2 * my_share
+
+            cur_value =  my_holding_token2 * CUR_PRICE[sym2] * 2
+
+            master_coins = ['USDT', 'UST', 'WBND', 'BNB', 'ETH', 'BUSD']
+            if sym1 in  master_coins : # sm1이 master_coins의 경우에는 순서를 바꿔서 출력
+                tmp = sym1
+                sym1 = sym2
+                sym2 = tmp
+                tmp = my_holding_token1
+                my_holding_token1 = my_holding_token2
+                my_holding_token2 = tmp
+            total_value += cur_value
+            print("%2d [%6s - %6s] %10.3f   %10.3f %10.3f  %10.3f %s"%(i, sym1, sym2, pending_token_real, my_holding_token1, my_holding_token2, cur_value, claimed))
+    print('----')
+    print('total value : ', total_value)
+    return total_claimed_token
+
+def yield_farming(name) :
+    pool_name = ACTIONS[name]['pool_name']
+    todo = ACTIONS[name]['todo']
+
+    print('\n===', pool_name, '===')
+    # pool의 각 pair별 LP 현황 출력, 현재 가치로 환산
+    total_claimed_token = 1
+    total_claimed_token = claim_rewards(pool_name, 10000, todo)  # min_harvest_num를 임의로 큰 값
+    if total_claimed_token > 0 :
+        num_token = get_num_token(claim_token_name, my_addr) # wallet에 있는 토큰 수
+        if todo == 'deposit' :
+            print('\n deposit ', claim_token_name, ' :', num_token / (10 ** 18 ), 'to :', deposit_pool)
+        elif todo == 'sell' :
+            sell_token(num_token-1, claim_token_name, 'busd') # num from to
+
+def get_name_using_ticker(tokens) :
+    name_tickers = {}
+    quoter = CoinGeckoAPI()
+
+    coins = quoter.get_coins_list()
+    for each in coins :
+        if each['symbol'].upper() in tokens : # 찾는 coin이 있다.
+            if each['symbol'] == 'anc'  :
+                if each['id'] == 'anchor-protocol' :
+                    name_tickers[each['symbol'].upper()] = each
+                continue
+            if each['symbol'] == 'uni'  :
+                if each['id'] == 'uniswap' :
+                    name_tickers[each['symbol'].upper()] = each
+                continue
+            elif each['symbol'] == 'vai'  :
+                if each['id'] == 'vai' :
+                    name_tickers[each['symbol'].upper()] = each
+                continue
+            else :
+                name_tickers[each['symbol'].upper()] = each
+
+    return name_tickers
+
+def get_cur_price() :
+    quoter = CoinGeckoAPI()
+    
+    gecko_name = get_name_using_ticker(INT_TOKENS)
+
+    # https://github.com/man-c/pycoingecko
+    #coin_list = ['binancecoin', 'bitcoin', 'ethereum', 'pancakeswap-token']
+    #coin_list_price = [298, 57670, 1964, 17.67]
+    for ticker in INT_TOKENS:
+        id = gecko_name[ticker]['id']
+        coin_price = quoter.get_price(ids=id, vs_currencies='usd')
+        price = float(coin_price[id]['usd'])
+        need_to_buy = ''
+        print('%6s : %12.3f %s'%(gecko_name[ticker]['symbol'], price, need_to_buy))
+        CUR_PRICE[ticker] = price
+
+    # WBNB는 BNB와 같은 가격으로
+    CUR_PRICE['WBNB'] = CUR_PRICE['BNB']
+
+while True:
+    get_cur_price()
+    try:
+        for finance in YIELD_ACTIONS :
+            yield_farming(finance) 
+        print('\ndone! waiting 1 hour')
+        time.sleep(60*60) # every hour
+    except Exception as e:
+        print('error', e)
+        break
